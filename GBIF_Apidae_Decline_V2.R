@@ -264,10 +264,10 @@ plot_est_all <-
 
 #### Figure 1 --------
 grid.arrange(
-  plot_recs,
-  plot_sp,
-  plot_chao_prsv,plot_est_prsv,
-  plot_chao_all,plot_est_all,  
+  plot_recs, #1
+  plot_sp,  #2
+  plot_chao_all,plot_est_all, #3, #4
+  plot_chao_prsv,plot_est_prsv, #5, #6
   widths = c(1, 1, 1),
   layout_matrix = rbind(c(1, 1, 1),
                         c(2, 2, 2),
@@ -522,10 +522,10 @@ bees_all_recs_by_cont <- bees_all_cont %>% filter(Continent %in% continents) %>%
 #Plot Records By continent
 cont_stack <- ggplot(data=bees_all_recs_by_cont %>% filter(idecade>1940, idecade<2020), aes(fill= Continent, y=records, x = idecade))+
   geom_bar(position="stack", stat="identity", show.legend = F) +
-  xlab("iDecade")
+  xlab("idecade")
 cont_perc <- ggplot(data=bees_all_recs_by_cont %>% filter(idecade>1940, idecade<2020), aes(fill= Continent, y=records, x = idecade))+
   geom_bar(position="fill", stat="identity") +
-  xlab("iDecade") + ylab("Percent of decadal records")
+  xlab("idecade") + ylab("Proportion of idecadal records")
 
 #### Figure S3 -----
 grid.arrange(cont_stack, cont_perc, nrow = 1)
@@ -928,7 +928,7 @@ plot_est_pa <-
   xlab("idecade")  + ylab("Species richness")
 
 #### Figure S6 ####
-## Multipanel figure for continent-level analyses
+## Multipanel figure for country-level analyses
 grid.arrange(plot_us_recs, plot_us_sp,plot_chao_us,plot_est_us, 
              plot_br_recs, plot_br_sp,plot_chao_br,plot_est_br,
              plot_gb_recs, plot_gb_sp,plot_chao_gb,plot_est_gb,
