@@ -1,0 +1,1124 @@
+---
+title: "Worldwide occurrence records suggest a global decline in bee species richness"
+subtitle: "An analysis of multidecadal trends in bee species richness from GBIF data"
+author: "Eduardo E. Zattara^* 1,2^ and Marcelo A. Aizen^1,3^"
+output: html_document
+bibliography: Global_Bee_Decline_bibliography.ris
+csl: one-earth.csl
+---
+
+^1^ Grupo de Ecología de la Polinización, INIBIOMA, Universidad Nacional del Comahue-CONICET, Bariloche (8400), Río Negro, Argentina
+
+^2^ Department of Invertebrate Zoology, National Museum of Natural History, Smithsonian Institution, Washington, DC, USA
+
+^3^ Wissenschaftskolleg zu Berlin, 14193 Berlin, Germany
+
+^\*^Correspondence to ezattara@comahue-conicet.gob.ar
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Summary
+
+Wild and managed bees are key pollinators, ensuring or enhancing reproduction of a large fraction of the world’s wild flowering plants and the yield of ~85% of all cultivated crops. Recent reports of wild bee decline and its potential consequences are thus worrisome. However, evidence is mostly based on local or regional studies; the global status of bee decline has not been assessed yet. To fill this gap, we analyzed publicly available worldwide occurrence records from the Global Biodiversity Information Facility spanning over a century. We found that after the 1990’s the number of collected bee species declines steeply, with approximately 25% fewer species reported between 2006 and 2015 relative to those counted before the 1990’s. Although these trends must be interpreted cautiously given the heterogeneous nature of the dataset and potential biases in data collection and reporting, results suggest the need for swift actions to avoid further pollinator decline. 
+
+### Dataset
+
+To test our hypothesis of global bee decline, we queried the [Global Biodiversity Information Facility] (www.gbif.org) for all occurrence records of Hymenoptera prior to 2020 with either “Preserved specimen” or “Human observation” bases of record. An initial query using the filters [Scientific Name = “Hymenoptera”, Basis of Record = “PRESERVED_SPECIMEN” | “HUMAN_OBSERVATION”, Year <2020] resulted on 9,176,688 total records involving 2,374 datasets [@9745]. 
+
+```{bash, eval = FALSE}
+#Download data file from GBIF from Bbash
+wget https://api.gbif.org/v1/occurrence/download/request/0058082-200221144449610.zip
+unzip 0058082-200221144449610.zip
+```
+
+```{r load libraries and working variables,warning=FALSE,  message=FALSE}
+#Load necessary libraries
+library(tidyverse)
+library("data.table")
+library(gridExtra)
+library(nlme)
+library(iNEXT)
+library(viridisLite)
+library(vegan)
+
+#Enter here current GBIF download to analyze -- Change if using different file
+GBIFdata <- "0058082-200221144449610.csv" # All Hymenoptera PRESERVED_SPECIMEN + HUMAN_OBSERVATION until 2020
+
+#Country and continent codes, from https://datahub.io/JohnSnowLabs/country-and-continent-codes-list/r/0.html
+#Create a country code to country/continent table
+countries <- read_csv("country-and-continent-codes-list.csv")
+country2continent <- countries[,c(1,4)]
+colnames(country2continent)<-c("Continent","countryCode")
+
+#Select fields for GBIF data
+fields<- c("gbifID","speciesKey","family","genus","species","countryCode","decimalLatitude","decimalLongitude","year","institutionCode","datasetKey","taxonRank","basisOfRecord","collectionCode")
+
+#Select Hymenopteran families for the analysis
+anthophila_fams <-c("Melittidae","Andrenidae","Halictidae","Colletidae","Megachilidae","Apidae")
+outgroup_fams <- c("Formicidae","Sphecidae","Crabronidae")
+all_fams <- c(outgroup_fams,anthophila_fams)
+```
+
+
+```{r read data, eval=TRUE}
+#Read data from GBIF data file (WARNING: change nThread parameter to an appropriate value) for Anthophila, filtering out records without a species id
+#bees_all <-fread(GBIFdata, select=fields, nThread=6) %>% 
+#  filter(family %in% anthophila_fams, taxonRank=="SPECIES", year!="", species!="") %>%
+#  as_tibble()
+
+#save(bees_all, file="bees_all.Rdata")
+
+load(file="bees_all.Rdata")
+#Calculate the "idecade" columns for the records
+bees_all <- bees_all %>%
+  mutate(idecade = floor((bees_all$year + 4)/10)*10)
+```
+
+Data were downloaded as a text file and filtered for records identified to species levels and belonging to Anthophila (`r bees_all %>% filter(family %in% anthophila_fams) %>% tally()` records). We filtered the datasets to six families of the superfamily Apoidea that comprise the Anthophila or “true bees”[@9277]: Melittidae, Andrenidae, Halictidae, Colletidae, Megachilidae and Apidae (we excluded the small family Stenotritidae from our analysis, since it has only  21 species restricted to Australia) . 
+
+A binning variable grouping records every 10 years starting from 1946 (after the end of World War II, which caused a noticeable dip in collection intensity) and until 2015 inclusive, *idecade*, was calculated and named by the multiple-of-ten year in the middle (e.g., “1960” for the period between 1956 and 1965).
+
+Records of preserved specimens originate in vouchered collections such as those from museums and universities, or associated with biodiversity surveys and molecular barcoding initiatives, among others. Human observations, on the other hand, are records in which a given species was observed, but no voucher was collected; this category of records has been growing exponentially since citizen science initiatives became increasingly popular[@9723]. Because the preserved specimen records are likely to represent the most taxonomically traceable source of information within the GBIF dataset[@9723; @9764], we made parallel analyses for both the full dataset and the specimens-only subset.
+
+```{r count records and species per year, warning=FALSE,  message=FALSE}
+#Count number of records by species and year (for full and specimens-only datasets)
+bees_all_recs_by_sp_year <- bees_all %>% 
+  group_by(species, family, year, idecade) %>% 
+  count()
+
+bees_prsv_recs_by_sp_year <- bees_all %>% 
+  filter(basisOfRecord=="PRESERVED_SPECIMEN")%>% 
+  group_by(species, family, year, idecade) %>% 
+  count()
+
+#Histograms of abundance of records
+g_recs_all_hist <-
+ggplot(bees_all_recs_by_sp_year %>% filter(idecade>1940), aes(log(n))) +
+  geom_histogram() +
+  facet_grid(idecade~.) + scale_y_log10() +
+  ggtitle("Full dataset")
+
+g_recs_prsv_hist <-
+ggplot(bees_prsv_recs_by_sp_year %>% filter(idecade>1940), aes(log(n))) +
+  geom_histogram() +
+  facet_grid(idecade~.) + scale_y_log10() +
+  ggtitle("Preserved specimens")
+
+grid.arrange(g_recs_all_hist, g_recs_prsv_hist, ncol =2)
+```
+
+The idecadal histograms of yearly record counts per species are similar with the full dataset showing longer tails of high counts in the last two idecades.
+
+## Yearly trends
+
+A table showing the yearly number of records, species, datasets, collections and institutions is built.
+
+```{r construct yearly counts of all elements}
+#Count number of species per year (for complete and preserved specimens only datasets)
+bees_all_sp_year <- bees_all_recs_by_sp_year %>% 
+  select(-n)  %>% 
+  group_by(year) %>% 
+  count() %>% 
+  rename(sp = n)
+
+bees_prsv_sp_year <- bees_prsv_recs_by_sp_year %>% 
+  select(-n) %>% 
+  group_by(year) %>% 
+  count() %>% 
+  rename(sp = n)
+
+#Count number of records per year (for complete and preserved specimens only datasets)
+bees_all_recs_year <- bees_all %>% 
+  group_by(year) %>%
+  count() %>% 
+  rename(records = n)
+
+bees_prsv_recs_year <- bees_all %>% 
+  filter(basisOfRecord=="PRESERVED_SPECIMEN") %>% 
+  group_by(year) %>% 
+  count() %>% 
+  rename(records = n)
+
+#Count number of datasets per year (for complete and preserved specimens only datasets)
+bees_all_recs_by_dataset_year <- bees_all %>% 
+  group_by(year, datasetKey) %>% 
+  count() 
+
+bees_all_datasets_year <- bees_all_recs_by_dataset_year %>% 
+  select(-n) %>% 
+  group_by(year) %>% 
+  count() %>% 
+  rename(datasets = n)
+
+bees_prsv_recs_by_dataset_year <- bees_all %>% 
+  filter(basisOfRecord=="PRESERVED_SPECIMEN") %>% 
+  group_by(year, datasetKey) %>% 
+  count()
+
+bees_prsv_datasets_year <- bees_prsv_recs_by_dataset_year %>% 
+  select(-n) %>% 
+  group_by(year) %>% 
+  count() %>% 
+  rename(datasets = n)
+
+#Count number of collections per year (for complete and preserved specimens only datasets)
+bees_all_recs_by_collection_year <- bees_all %>% 
+  group_by(year, collectionCode) %>% 
+  count()
+
+bees_all_collections_year <- bees_all_recs_by_collection_year %>% 
+  select(-n)  %>% 
+  group_by(year) %>% 
+  count() %>% 
+  rename(collections = n)
+
+bees_prsv_recs_by_collection_year <- bees_all %>% 
+  filter(basisOfRecord=="PRESERVED_SPECIMEN") %>% 
+  group_by(year, collectionCode) %>% 
+  count()
+
+bees_prsv_collection_year <- bees_prsv_recs_by_collection_year %>% 
+  select(-n) %>% 
+  group_by(year) %>% 
+  count() %>% 
+  rename(collections = n)
+
+#Count number of institutions per year (for complete and preserved specimens only datasets)
+bees_all_recs_by_institution_year <- bees_all %>% 
+  group_by(year, institutionCode) %>% 
+  count()
+
+bees_all_institution_year <- bees_all_recs_by_institution_year %>% 
+  select(-n) %>% 
+  group_by(year) %>% 
+  count() %>% 
+  rename(institutions = n)
+
+bees_prsv_recs_by_institution_year <- bees_all %>% 
+  filter(basisOfRecord=="PRESERVED_SPECIMEN") %>% 
+  group_by(year, institutionCode) %>% 
+  count()
+
+bees_prsv_institution_year <- bees_prsv_recs_by_institution_year %>% 
+  select(-n) %>% 
+  group_by(year) %>% 
+  count() %>% 
+  rename(institutions = n)
+
+#Merge all yearly counts
+bees_all_gbif_year <- full_join(bees_all_sp_year, bees_all_recs_year, by = "year") %>% 
+  full_join(bees_all_datasets_year, by = "year") %>% 
+  full_join(bees_all_collections_year, by = "year") %>% 
+  full_join(bees_all_institution_year, by = "year")
+
+bees_prsv_gbif_year <- full_join(bees_prsv_sp_year, bees_prsv_recs_year, by = "year") %>% 
+  full_join(bees_prsv_datasets_year, by = "year") %>% 
+  full_join(bees_prsv_collection_year, by = "year") %>% 
+  full_join(bees_prsv_institution_year, by = "year")
+
+```
+
+Each of the components of the yearly dataset (records, species, data providers) can be plotted for both the full and specimens-only datasets.
+
+```{r Generating plots for yearly data series}
+#Plot number of records by year
+plot_recs <-
+ggplot() +
+  geom_point(data = bees_all_recs_year %>% filter(year<2020, year>1900), aes(x = year, y = records), color = "#00AFBB") +
+  geom_point(data = bees_all_recs_year %>% filter(year<2020, year>2015), aes(x = year, y = records+500), color = "black", shape = 8) +
+  geom_smooth(data = bees_all_recs_year %>% filter(year<2016, year>1900), aes(x = year, y = records), color = "#00AFBB", fill = "lightblue") +
+  geom_point(data = bees_prsv_recs_year %>% filter(year<2020, year>1900), aes(x = year, y = records), color = "red") +
+  geom_point(data = bees_prsv_recs_year %>% filter(year<2020, year>2015), aes(x = year, y = records+500), color = "black", shape = 8) +
+  geom_smooth(data = bees_prsv_recs_year %>% filter(year<2016, year>1900), aes(x = year, y = records), color = "red", fill = "pink") +
+  ylab("No. records") + xlab("Year")
+
+
+#Plot number of species by year
+plot_sp <-
+ggplot() +
+  geom_point(data = bees_all_sp_year %>% filter(year<2020, year>1900), aes(x = year, y = sp), color = "#00AFBB") +
+  geom_point(data = bees_all_sp_year %>% filter(year<2020, year>2015), aes(x = year, y = sp), color = "blue", shape = 19) +
+  geom_point(data = bees_all_sp_year %>% filter(year<2020, year>2015), aes(x = year, y = sp+20), color = "black", shape = 8) +
+  geom_smooth(data = bees_all_sp_year %>% filter(year<2016, year>1900), aes(x = year, y = sp), color = "#00AFBB", fill = "lightblue") +
+  geom_point(data = bees_prsv_sp_year %>% filter(year<2020, year>1900), aes(x = year, y = sp), color = "red") +
+  geom_point(data = bees_prsv_sp_year %>% filter(year<2020, year>2015), aes(x = year, y = sp), color = "darkred", shape = 19) +
+  geom_point(data = bees_prsv_sp_year %>% filter(year<2020, year>2015), aes(x = year, y = sp+20), color = "black", shape = 8) +
+  geom_smooth(data = bees_prsv_sp_year %>% filter(year<2016, year>1900), aes(x = year, y = sp), color = "red", fill = "pink") +
+  ylab("species richness") + xlab("Year")
+
+
+#Plot number of datasets by year
+plot_datasets <-
+ggplot() +
+  geom_point(data = bees_all_datasets_year %>% filter(year<2020, year>1920), aes(x = year, y = datasets), color = "#00AFBB") +
+  geom_smooth(data = bees_all_datasets_year %>% filter(year<2016, year>1920), aes(x = year, y = datasets), color = "#00AFBB", fill = "lightblue") +
+  geom_point(data = bees_prsv_datasets_year %>% filter(year<2020, year>1920), aes(x = year, y = datasets), color = "red") +
+  geom_smooth(data = bees_prsv_datasets_year %>% filter(year<2016, year>1920), aes(x = year, y = datasets), color = "red", fill = "pink") +
+  ylim(0, max(bees_all_datasets_year$datasets)*1.05)
+
+#Plot number of collections by year
+plot_collections <- 
+ggplot() +
+  geom_point(data = bees_all_collections_year %>% filter(year<2020, year>1920), aes(x = year, y = collections), color = "#00AFBB") +
+  geom_smooth(data = bees_all_collections_year %>% filter(year<2016, year>1920), aes(x = year, y = collections), color = "#00AFBB", fill = "lightblue") +
+  geom_point(data = bees_prsv_collection_year %>% filter(year<2020, year>1920), aes(x = year, y = collections), color = "red") +
+  geom_smooth(data = bees_prsv_collection_year %>% filter(year<2016, year>1920), aes(x = year, y = collections), color = "red", fill = "pink") 
+
+#Plot number of institutions by year
+plot_institutions <-
+ggplot() +
+  geom_point(data = bees_all_institution_year %>% filter(year<2020, year>1920), aes(x = year, y = institutions), color = "#00AFBB") +
+  geom_smooth(data = bees_all_institution_year %>% filter(year<2016, year>1920), aes(x = year, y = institutions), color = "#00AFBB", fill = "lightblue") +
+  geom_point(data = bees_prsv_institution_year %>% filter(year<2020, year>1920), aes(x = year, y = institutions), color = "red") +
+  geom_smooth(data = bees_prsv_institution_year %>% filter(year<2016, year>1920), aes(x = year, y = institutions), color = "red", fill = "pink")
+```
+
+
+Plotting the total number of records per year in both datasets shows that the number of worldwide bee occurrence records follows a mostly monotonic increasing trend that becomes steeper after 1990. Since the four most recent years (2016-2019, marked with *) show a noticeable drop in records, likely due to time lags in data entry [@9757], we excluded those years from further analyses to avoid a downward bias in the most recent years.
+
+```{r plot yearly records, warning=FALSE,  message=FALSE}
+plot_recs
+```
+
+In contrast, while the number of recorded species per year during the same period also increases initially, it reaches a steady maximum after 1950 but then shows a noticeable decline starting near the end of the 20th century. 
+
+```{r plot yearly species, warning=FALSE,  message=FALSE}
+plot_sp
+```
+
+Significance of a negative trend is tested by fitting yearly counts of records, species, collections, institutions and datasets a generalized least squares model with the formula `sp ~ year + records + collections + institutions + datasets`, with an autoregressive-moving average autocorrelation structure of order (1,0). 
+
+```{r Testing for negative trend after 1985}
+
+# Generalized least squares with an autocorrelation-moving average correlation structure of order 1,0 on full dataset
+bees_all_glsau <- gls(data=bees_all_gbif_year %>% filter(year>1985, year<2016), 
+                      sp ~  year+ records + collections + institutions + datasets,
+                      correlation = corARMA(form = ~year, p=1, q=0))
+summary(bees_all_glsau)
+
+# Generalized least squares with an autocorrelation-moving average correlation structure of order 1,0 on specimens-only dataset
+bees_prsv_glsau <- gls(data=bees_prsv_gbif_year %>% filter(year>1985, year<2016), 
+                      sp ~  year+ records + collections + institutions + datasets,
+                      correlation = corARMA(form = ~year, p=1, q=0))
+summary(bees_prsv_glsau)
+```
+
+The results show that the negative temporal trend starting at the 1990's idecade persists even when number of records and of contributing collections, institutions and datasets are considered (gls estimate + s.e. for the period 1986-2016: `r round(bees_all_glsau$coefficients[2],3)`± 11.0, t value: -2.9, p = 0.008). Thus, fewer species have been reported globally within GBIF records since approximately the 1990s.
+
+
+## Trends of records binned by idecade
+
+Each year of data was assigned to a 10-year period termed “idecade” (for inter-decade), corresponding to a regular decade shifted four years into the past (e.g., the 1990’s idecade spans 1986 to 1995). Records by species and idecade are then counted and stored in a matrix of *m* species × 7 idecades (1950’s to 2010’s). This matrix is used as abundance data input for the iNEXT function of the iNEXT package [@9189] to estimate rarefaction-based interpolation/extrapolation (iNEXT) curves and Chao1 asymptotic estimators of species richness [@9757].
+
+```{r Chao estimations}
+#Count number of records by species and idecade (for complete and preserved specimens only datasets)
+bees_all_recs_by_sp_idec <- bees_all %>% 
+  group_by(species, family, idecade) %>% 
+  count()
+
+bees_prsv_recs_by_sp_idec <- bees_all %>% 
+  filter(basisOfRecord=="PRESERVED_SPECIMEN")%>% 
+  group_by(species, family, idecade) %>% 
+  count()
+
+#Generate idecadal matrices and calculate Chao stats
+bees_all_recs_by_sp_idec.mat <-with(bees_all_recs_by_sp_idec %>% filter(idecade>1940, idecade<2020), as.data.frame(tapply(n, list(species,idecade),sum, na.rm=T)))
+bees_all_recs_by_sp_idec.mat[is.na(bees_all_recs_by_sp_idec.mat)] <- 0
+#bees_all_global_chao_idec <- iNEXT(bees_all_recs_by_sp_idec.mat, q=0, datatype = "abundance")
+#save(bees_all_global_chao_idec, file="bees_all_global_chao_idec.Rdata")
+load("bees_all_global_chao_idec.Rdata")
+
+bees_prsv_recs_by_sp_idec.mat <-with(bees_prsv_recs_by_sp_idec %>% filter(idecade>1940, idecade<2020), as.data.frame(tapply(n, list(species,idecade),sum, na.rm=T)))
+bees_prsv_recs_by_sp_idec.mat[is.na(bees_prsv_recs_by_sp_idec.mat)] <- 0
+#bees_prsv_global_chao_idec <- iNEXT(bees_prsv_recs_by_sp_idec.mat, q=0, datatype = "abundance")
+#save(bees_prsv_global_chao_idec, file="bees_prsv_global_chao_idec.Rdata")
+load("bees_prsv_global_chao_idec.Rdata")
+```
+
+
+
+```{r Plot accumulation curves, warning=FALSE}
+# Plot iNEXT curves
+plot_chao_prsv <- 
+  ggiNEXT(bees_prsv_global_chao_idec, type=1) +
+  scale_shape_manual(values=c(19,19,19,19,19,19,19)) + xlim(0,1200000) +
+  scale_colour_manual(values=viridis(length(levels(bees_prsv_global_chao_idec$AsyEst$Site)),direction=-1)) +
+  theme(legend.position="none", axis.text=element_text(size=10),axis.title=element_text(size=12) ) + 
+  xlab("No. records (full dataset)") + ylab("Species richness")
+
+plot_chao_all <- 
+  ggiNEXT(bees_all_global_chao_idec, type=1, ) +
+  scale_shape_manual(values=c(19,19,19,19,19,19,19))  + xlim(0,1200000) +
+  scale_colour_manual(values=viridis(length(levels(bees_all_global_chao_idec$AsyEst$Site)),direction=-1)) +
+  theme(legend.position="none", axis.text=element_text(size=10),axis.title=element_text(size=12)) + 
+  xlab("No. records (specimens-only dataset)") + ylab("Species richness")
+
+grid.arrange(plot_chao_all, plot_chao_prsv, ncol = 1)
+
+```
+
+Accumulation curves are informative about how well sampled a given idecade is, but the asymptotic estimates of species richness are less obvious. The estimate values and their confidence intervals can be extracted from the iNEXT objects.
+
+```{r Extract and plot asymptotic estimates}
+
+# Extract and plot estimators as barplots
+
+#Full dataset 
+chaoasyest_global_bees_all_idec <- bees_all_global_chao_idec$AsyEst[seq(1,21,3),]
+
+plot_est_all <- 
+  ggplot(chaoasyest_global_bees_all_idec, aes(Site, Estimator)) +
+  geom_bar(stat="Identity") +
+  coord_cartesian(ylim = c(4000, 7000)) + 
+  geom_errorbar(aes(ymin=LCL, ymax=UCL), width=.2,
+                position=position_dodge(.9)) +
+  xlab("iDecade") + ylab("Species richness") +
+  ggtitle("Full dataset")
+
+#Specimens-only dataset
+chaoasyest_global_bees_prsv_idec <- bees_prsv_global_chao_idec$AsyEst[seq(1,21,3),]
+
+plot_est_prsv <- 
+ggplot(chaoasyest_global_bees_prsv_idec, aes(Site, Estimator)) +
+  geom_bar(stat="Identity") +
+  coord_cartesian(ylim = c(4000, 7000)) + 
+  geom_errorbar(aes(ymin=LCL, ymax=UCL), width=.2,
+                position=position_dodge(.9)) +
+  xlab("iDecade")  + ylab("Species richness") +
+  ggtitle("Specimen-only dataset")
+
+grid.arrange(plot_est_all, plot_est_prsv, nrow = 1)
+```
+
+The results show that species found in the full dataset during the 2000 idecade represent a decrease of `r round(1-chaoasyest_global_bees_all_idec[6,4]/mean(chaoasyest_global_bees_all_idec[1:5,4]),4)*100 `% of the average estimate between 1946 and 1995, while in the 2010 idecade estimated richness decreased by `r round(1-chaoasyest_global_bees_all_idec[7,4]/mean(chaoasyest_global_bees_all_idec[1:5,4]),4)*100`% relative to the average estimate between 1946 and 1995.
+
+For the specimens-only dataset, these values are `r round(1-chaoasyest_global_bees_prsv_idec[6,4]/mean(chaoasyest_global_bees_prsv_idec[1:5,4]),4)*100 `% for the 2000 idecade, and `r round(1-chaoasyest_global_bees_prsv_idec[7,4]/mean(chaoasyest_global_bees_prsv_idec[1:5,4]),4)*100 `% for the 2010 idecade.
+
+These results suggest that the number of species among bee specimens collected worldwide is showing a sharp decline.
+
+## Families
+
+Bee families in the dataset are heterogeneous in terms of richness and abundance, and the observed trends might be driven by just a few bee clades. To make a more phylogenetically-explicit analysis exploring whether bees show a differential temporal trend compared to their closest relatives, and whether particular bee families are more endangered than others, we re-analyzed the specimen dataset, this time retaining also `r bees_all %>% filter(family %in% c("Sphecidae","Crabronidae")) %>% tally()` records for two families of carnivorous apoid wasps, Crabronidae and Sphecidae, that are sister to Anthophila, and `r bees_all %>% filter(family == "Formicidae") %>% tally()` records of another highly diverse, non-apoid hymenopteran family, the Formicidae (ants) [@8960]. Phylogenetic relations between all families follow recent phylogenomics results [@9196]. 
+
+
+```{r Read GBIF data for extended dataset, warning=FALSE}
+# Re-read data from GBIF data file (WARNING: change nThread parameter to an appropriate value) for Anthophila+Outgroups, 
+# filtering out records without a species id
+bwa_all <-fread(GBIFdata, select=fields, nThread=6) %>% 
+  filter(family %in% all_fams, taxonRank=="SPECIES", year!="", species!="")
+bwa_all$idecade <- floor((bwa_all$year + 4)/10)*10
+bwa_all$family <- factor(bwa_all$family,levels=all_fams)
+
+bwa_prsv <- bwa_all %>% filter(basisOfRecord=="PRESERVED_SPECIMEN")
+
+#Total Records per Family
+records_per_fam <- bwa_all %>% group_by(family) %>% count()
+
+#Count number of records by species and year (for complete and preserved specimens only datasets)
+bwa_all_recs_by_sp_year <- bwa_all %>% 
+  group_by(species, family, year, idecade) %>% 
+  count()
+bwa_prsv_recs_by_sp_year <- bwa_prsv %>% 
+  group_by(species, family, year, idecade) %>% 
+  count()
+
+bwa_all_recs_year <- bwa_all_recs_by_sp_year %>% 
+  group_by(family, year) %>% 
+  count() %>% 
+  rename(records = n)
+
+bwa_prsv_recs_year <- bwa_prsv_recs_by_sp_year %>% 
+  group_by(family, year) %>% 
+  count() %>% 
+  rename(records = n)
+```
+```{r plot records per year by family, warning=FALSE}
+#Plot number of records per year, by family, for full (blue) and specimen-only (red) datasets
+ggplot() +
+  geom_point(data = bwa_all_recs_year %>% filter(year<2016, year>1945), aes(x = year, y = records), color = "#00AFBB") +
+  geom_smooth(data = bwa_all_recs_year %>% filter(year<2016, year>1945), aes(x = year, y = records), color = "#00AFBB", fill = "lightblue") +
+  geom_point(data = bwa_prsv_recs_year %>% filter(year<2016, year>1945), aes(x = year, y = records), color = "red") +
+  geom_smooth(data = bwa_prsv_recs_year %>% filter(year<2016, year>1945), aes(x = year, y = records), color = "red", fill = "pink") +
+  facet_grid(family~., scales = "free") 
+```
+
+```{r plot species per year by family, warning=FALSE, message=FALSE}
+#Count number of species by year, grouped by family (for complete and preserved specimens only datasets)
+bwa_all_sp_year <- bwa_all_recs_by_sp_year  %>% 
+  select(-n)  %>% 
+  group_by(family, year) %>% 
+  count() %>% 
+  rename(sp = n)
+bwa_prsv_sp_year <- bwa_prsv_recs_by_sp_year  %>% 
+  select(-n)  %>% 
+  group_by(family, year) %>% 
+  count() %>% 
+  rename(sp = n)
+
+all_famcols=c("gray","blue","blue","violet","red","red","red","darkorange","darkorange")
+names(all_famcols)<- all_fams
+
+#Plot species per year, by family, full dataset
+p_fam_sp_year_all <- ggplot(bwa_all_sp_year %>% filter(year<2016, year>1945), aes(x = year, y = sp, color = family)) +
+  geom_point(show.legend = F)+
+  geom_smooth(show.legend = F)+
+  facet_grid(family~., scales = "free_y")+
+  scale_color_manual(values = all_famcols) +
+  ggtitle("Full dataset")
+
+#Plot species per year, by family, specimen-only dataset
+p_fam_sp_year_prsv <- ggplot(bwa_prsv_sp_year %>% filter(year<2016, year>1945), aes(x = year, y = sp, color = family)) +
+  geom_point(show.legend = F)+
+  geom_smooth(show.legend = F)+
+  facet_grid(family~., scales = "free_y")+
+  scale_color_manual(values = all_famcols) +
+  ggtitle("Specimens-only dataset")
+
+grid.arrange(p_fam_sp_year_all, p_fam_sp_year_prsv, ncol = 2)
+```
+
+Just as was done for the Anthophila dataset, records grouped by family can be binned into idecades, and used to draw species accumulation curves and asymptotic estimators of idecadal record richness.
+
+```{r Calculate Chao statistics for each FAMILY}
+#Count number of records by species and idecade (for complete and preserved specimens only datasets)
+bwa_all_recs_by_sp_idec <- bwa_all %>% 
+  group_by(species, family, idecade) %>% 
+  count()
+bwa_prsv_recs_by_sp_idec <- bwa_prsv %>% 
+  group_by(species, family, idecade) %>% 
+  count()
+
+#Then create an empty list to hold the iNEXT output for each family and run iNEXT in each family
+#bwa_all_idec_chao <- list()
+#for (i in all_fams)
+#{
+#  famdata <- with(bwa_all_recs_by_sp_idec %>% 
+#                    filter(idecade>1940, idecade<2020, family == i), 
+#                  as.data.frame(tapply(n, list(species,idecade),sum, na.rm=T)))
+#  famdata[is.na(famdata)] <- 0
+#  bwa_all_idec_chao[[i]] <- iNEXT(famdata, q=0, datatype = "abundance")
+#}
+#save(bwa_all_idec_chao, file = "bwa_all_idec_chao.Rdata")
+load("bwa_all_idec_chao.Rdata")
+
+#bwa_prsv_idec_chao <- list()
+#for (i in all_fams)
+#{
+#  famdata <- with(bwa_prsv_recs_by_sp_idec %>% 
+#                    filter(idecade>1940, idecade<2020, family == i), 
+#                  as.data.frame(tapply(n, list(species,idecade),sum, na.rm=T)))
+#  famdata[is.na(famdata)] <- 0
+#  bwa_prsv_idec_chao[[i]] <- iNEXT(famdata, q=0, datatype = "abundance")
+#}
+#save(bwa_prsv_idec_chao, file = "bwa_prsv_idec_chao.Rdata")
+load("bwa_prsv_idec_chao.Rdata")
+
+```
+
+
+```{r Plot Chao curves for each family}
+for (i in all_fams){ 
+  p <- 
+  ggiNEXT(bwa_prsv_idec_chao[[i]], type=1) +
+  scale_shape_manual(values=c(16,16,16,16,16,16,16)) +
+  scale_size_manual(values = rep(2,9)) +
+  scale_colour_manual(values=viridis(length(levels(bwa_prsv_idec_chao[[i]]$AsyEst$Site)),direction=-1)) +
+  theme(legend.position="none", axis.title.x = element_blank(),axis.title.y = element_blank(), text = element_text(size = 10)) +
+          ggtitle(i)
+
+ 
+  assign(paste0("chao_prsv_plot_", i), p)
+}
+
+grid.arrange(chao_prsv_plot_Formicidae,
+             chao_prsv_plot_Sphecidae,
+             chao_prsv_plot_Crabronidae,
+             chao_prsv_plot_Melittidae,
+             chao_prsv_plot_Andrenidae,
+             chao_prsv_plot_Halictidae,
+             chao_prsv_plot_Colletidae,
+             chao_prsv_plot_Megachilidae,
+             chao_prsv_plot_Apidae,
+             ncol = 3)
+```
+
+```{r Extract and plot asymptotic estimators}
+for (i in all_fams){ 
+  asyest <- bwa_prsv_idec_chao[[i]]$AsyEst[seq(1,21,3),]
+  p <- 
+  ggplot(asyest, aes(Site, Estimator)) +
+  geom_bar(stat="Identity") +
+  coord_cartesian(ylim = c(0.9*min(asyest$LCL), max(asyest$UCL))) + 
+  geom_errorbar(aes(ymin=LCL, ymax=UCL), width=.2, position=position_dodge(.9)) +
+  theme(legend.position="none", axis.title.x = element_blank(), axis.title.y = element_blank(), text = element_text(size = 8)) +
+  ggtitle(i)
+    assign(paste0("chao_prsv_est_", i), p)
+}
+
+grid.arrange(chao_prsv_est_Formicidae,
+             chao_prsv_est_Sphecidae,
+             chao_prsv_est_Crabronidae,
+             chao_prsv_est_Melittidae,
+             chao_prsv_est_Andrenidae,
+             chao_prsv_est_Halictidae,
+             chao_prsv_est_Colletidae,
+             chao_prsv_est_Megachilidae,
+             chao_prsv_est_Apidae,
+             ncol = 3, nrow = 3)
+
+```
+
+The results show different patterns of species richness in records of each family, with noticeable phylogenetic structure. Long-tongued bees (Megachilidae and Apidae) show a steepening decline starting at 2000’s, while short-tongued bees show declines starting earlier (Andrenidae and Halictidae) or later (Colletidae). These declines in richness of recorded species relative to the average number found between 1950 and 1990 ranged from 17% for Halictidae to over 41% for Melittidae. 
+
+Comparisons between Anthophila families and two families of apoid wasps sister to bees, and to a more distantly related family, the true ants (Formicidae), reveals contrasting trends. While both wasp families also show declining trends, they present different patterns than bees. Record richness of sphecid and crabronid wasps both show a smoother decrease initiating earlier than the 2000’s. In contrast, ants show very little evidence of global record richness decline, but rather a trend towards an increase in the number of recorded species. 
+
+Although the limited number of bee families precludes a formal analysis of phylogenetic patterning, closely related families (e.g., Apidae and Megachilidae, or Colletidae and Halictidae) seem to share more similar trends in terms of timing and magnitude of species richness decline than less related families. This hint of phylogenetic patterning becomes even more apparent when considering the two apoid wasp families, Crabronidae and Sphecidae. 
+
+Altogether, family-specific trends and asymptotic richness estimates show that the overall decline in global bee record richness is not driven by any particular family. Instead, a generalized decline seems to be a pervasive feature within the bee lineage.
+
+
+## Testing asymptotic estimators by family
+
+To rule out the possibility that the method we used to estimate richness does not correlate with actual bee diversity, we compared the asymptotic estimator of total richness for each family based on GBIF records with the total known number of species and found a linear correlation between both estimates across families.
+
+```{r calculate asymptotic richness and compare to known richness, warning=FALSE}
+#Species counts obtained from the Integrated Taxonomic Information System (ITIS, www.itis.gov).
+itis_sp_cts <-c(10213,784,8871,206,3010,4186,2493,5062,5677)
+names(itis_sp_cts)<-all_fams
+
+bwa_all_species_family <- bwa_all %>% 
+  group_by(species, family) %>% 
+  count()
+
+#global_chao_fams <- list()
+#for (i in all_fams)
+#{
+#  famdata <- bwa_all_species_family %>% filter(family==i)
+#  famdata <- as.matrix(famdata[,c(-1,-2)])
+#  global_chao_fams[[i]] <- iNEXT(famdata, q=0, datatype = "abundance")
+#}
+#save(global_chao_fams, file="global_chao_fams.Rdata")
+
+load("global_chao_fams.Rdata")
+
+chao_sp_cts <-as.numeric()
+for(i in all_fams) {chao_sp_cts[i]<- global_chao_fams[[i]]$AsyEst[1,4]}
+chao_sp_cts <-unlist(chao_sp_cts)
+
+itis_chao <- bind_cols(as_tibble(cbind(itis_sp_cts, chao_sp_cts)), all_famcols)
+names(itis_chao) <- c("itis","chao","Family")
+
+ggplot(data= itis_chao, aes(x= itis, y=chao)) +
+  geom_point() + xlab ("ITIS Species Count") +
+  ylab("Asymptotic Estimator of Richness") +
+  geom_text(aes(label = all_fams), nudge_y= 300, size=3) +
+  geom_abline(slope = 1)
+```
+
+## Checking for loss of taxonomic expertise
+
+Another potential artifact causing a decline in recorded bee diversity in the last two idecades could be an increasing loss in taxonomic expertise during that period [@9275; @9272; @9274]. Under such scenario, we would expect the fraction of records unidentified to the species level – a reasonable proxy for lack of expertise[@9723] – should have stayed approximately constant until the last two decades and then increased noticeably. 
+
+```{r Counting fraction of species with no ID, message=FALSE, warning=FALSE}
+#Filter anthophila families from unfiltered original GBIF data
+bees_raw <-fread(GBIFdata, select=fields, nThread=6) %>% 
+  filter(family %in% anthophila_fams, year!="")
+
+total_recs_year <- bees_raw %>% 
+  group_by(year) %>% 
+  count() %>% 
+  rename(all = n)
+missid_year <- bees_raw %>% 
+  filter(taxonRank %in% c("GENUS","FAMILY", "UNRANKED")) %>% 
+  group_by(year) %>% count() %>% 
+  rename(misid = n)
+
+missid_year <- right_join(missid_year, total_recs_year, by="year")
+missid_year$fraction <- missid_year$misid/missid_year$all
+
+# Plot
+ggplot(missid_year %>% filter(year>1899, year<2016), aes(x = year, y = fraction)) +
+  geom_point() +
+  geom_smooth() +
+  ylab("Fraction of record missing species-rank ID") + xlab("Year")
+```
+
+While the fraction of records missing species’ identification shows an overall increase in the last 120 years, this trend has actually reversed since the 2000’s . This result is consistent with previous analyses of the GBIF dataset[@9723], and shows that potential loss of taxonomic expertise cannot explain the decline in bee record diversity seen at the last two decades.
+
+## Continent-level trends
+
+Next, we explored the geographic distribution of the dataset by sub-setting the data by continent and repeating the analyses. 
+
+```{r Estimate trends for Anthophila per continent, message=FALSE, warning=FALSE}
+continents <- c("Africa","Asia","Europe","North America","Oceania","South America")
+
+#Count records per decade and continent
+bees_all_cont <-left_join(bees_all %>% filter(countryCode!=""), country2continent, by="countryCode") 
+bees_all_cont_recs_by_sp_year <- bees_all_cont %>% group_by(species, Continent, year, idecade) %>% summarize(records = length(gbifID))
+bees_prsv_cont_recs_by_sp_year <- bees_all_cont %>% filter(basisOfRecord=="PRESERVED_SPECIMEN")  %>% group_by(species, Continent, year, idecade) %>% summarize(records = length(gbifID))
+
+#Count records per continent
+bees_all_recs_by_cont <- bees_all_cont %>% filter(Continent %in% continents) %>% group_by(Continent, idecade) %>% summarize(records = length(gbifID))
+
+#Plot Records By continent
+cont_stack <- ggplot(data=bees_all_recs_by_cont %>% filter(idecade>1940, idecade<2020), aes(fill= Continent, y=records, x = idecade))+
+  geom_bar(position="stack", stat="identity", show.legend = FALSE) +
+  xlab("idecade")
+cont_perc <- ggplot(data=bees_all_recs_by_cont %>% filter(idecade>1940, idecade<2020), aes(fill= Continent, y=records, x = idecade))+
+  geom_bar(position="fill", stat="identity") +
+  xlab("idecade") + ylab("Proportion of idecadal records")
+
+# Plot continental contribution
+grid.arrange(cont_stack, cont_perc, nrow = 1)
+
+```
+
+Overall, GBIF has a strong bias towards North American and European records[@9757], and this bias results in a very uneven contribution of each continent to idecadal number of records.
+```{r Count species per year and continent, message=FALSE, warning=FALSE}
+#Count number of species by year, grouped by continent (for complete and preserved specimens only datasets)
+bees_all_cont_sp_year <- bees_all_cont_recs_by_sp_year  %>% select(-records)  %>% group_by(Continent, year) %>% count() %>% rename(sp = n)
+bees_all_cont_recs_year <- bees_all_cont_recs_by_sp_year %>% group_by(Continent, year) %>% summarize(records = sum(records))
+
+bees_prsv_cont_sp_year <- bees_prsv_cont_recs_by_sp_year  %>% select(-records)  %>% group_by(Continent, year) %>% count() %>% rename(sp = n)
+bees_prsv_cont_recs_year <- bees_prsv_cont_recs_by_sp_year %>% group_by(Continent, year) %>% summarize(records = sum(records))
+
+cont_recs <- 
+ggplot() +
+  geom_point(data = bees_all_cont_recs_year %>% filter(year<2016, year>1945, !is.na(Continent)), aes(x = year, y = records), color = "#00AFBB") +
+  geom_smooth(data = bees_all_cont_recs_year %>% filter(year<2016, year>1945, !is.na(Continent)), aes(x = year, y = records), color = "#00AFBB", fill = "lightblue") +
+  geom_point(data = bees_prsv_cont_recs_year %>% filter(year<2016, year>1945, !is.na(Continent)), aes(x = year, y = records), color = "red") +
+  geom_smooth(data = bees_prsv_cont_recs_year %>% filter(year<2016, year>1945, !is.na(Continent)), aes(x = year, y = records), color = "red", fill = "pink") +
+  facet_grid(Continent~., scales = "free_y",  switch = "y") +
+  theme(axis.title.x = element_blank(), axis.title.y = element_blank(), text = element_text(size = 12),  strip.background = element_blank(), strip.placement = "outside")
+ 
+
+cont_sp <- ggplot() +
+  geom_point(data = bees_all_cont_sp_year %>% filter(year<2016, year>1945, !is.na(Continent)), aes(x = year, y = sp), color = "#00AFBB") +
+  geom_smooth(data = bees_all_cont_sp_year %>% filter(year<2016, year>1945, !is.na(Continent)), aes(x = year, y = sp), color = "#00AFBB", fill = "lightblue") +
+  geom_point(data = bees_prsv_cont_sp_year %>% filter(year<2016, year>1945, !is.na(Continent)), aes(x = year, y = sp), color = "red") +
+  geom_smooth(data = bees_prsv_cont_sp_year %>% filter(year<2016, year>1945, !is.na(Continent)), aes(x = year, y = sp), color = "red", fill = "pink") +
+  facet_grid(Continent~., scales = "free_y") +
+  theme(legend.position="none", axis.title.x = element_blank(),axis.title.y = element_blank(), text = element_text(size = 8), strip.background = element_blank(),strip.text.y = element_blank())
+
+```
+
+
+```{r full dataset Chao statistics for each CONTINENT, message=FALSE, warning=FALSE}
+## FULL dataset 
+#Create an empty list to hold the iNEXT output for each family and run iNEXT in each family
+#cont_all_idec_chao <- list()
+#for (i in continents)
+#{
+#  contdata <- with(bees_all_cont_recs_by_sp_year %>% filter(idecade>1940, idecade<2020, Continent == i), as.data.frame(tapply(records, list(species,idecade),sum, na.rm=T)))
+#  contdata[is.na(contdata)] <- 0
+#  cont_all_idec_chao[[i]] <- iNEXT(contdata, q=0, datatype = "abundance")
+#}
+#save(cont_all_idec_chao, file = "cont_all_idec_chao.Rdata")
+load("cont_all_idec_chao.Rdata")
+
+# Generate ggiNEXT plots for each continent
+for (i in continents){ 
+  p <- 
+    ggiNEXT(cont_all_idec_chao[[i]], type=1) +
+    scale_shape_manual(values=c(16,16,16,16,16,16,16)) +
+    scale_size_manual(values = rep(2,9)) +
+    scale_colour_manual(values=viridis(length(levels(cont_all_idec_chao[[i]]$AsyEst$Site)),direction=-1)) +
+    theme(legend.position="none", axis.title.x = element_blank(),axis.title.y = element_blank(), text = element_text(size = 10))
+  assign(paste0("chao_all_plot_", sub(' ', '', i)), p)
+}
+
+# Extract idecadal richness estimator statistics for each continent and generate barplots
+for (i in continents){ 
+  asyest <- cont_all_idec_chao[[i]]$AsyEst[seq(1,21,3),]
+  p <- 
+    ggplot(asyest, aes(Site, Estimator)) +
+    geom_bar(stat="Identity") +
+    coord_cartesian(ylim = c(0.9*min(asyest$LCL), max(asyest$UCL))) + 
+    geom_errorbar(aes(ymin=LCL, ymax=UCL), width=.2, position=position_dodge(.9)) +
+    theme(legend.position="none", axis.title.x = element_blank(),axis.title.y = element_blank(), text = element_text(size = 6)) 
+  assign(paste0("chao_all_est_",  sub(' ', '', i)), p)
+}
+
+# Arrange and display ggiNEXT plots for each continent
+grid.arrange(cont_recs, cont_sp,
+             chao_all_plot_Africa, #3
+             chao_all_plot_Asia,
+             chao_all_plot_Europe,
+             chao_all_plot_NorthAmerica,
+             chao_all_plot_Oceania,
+             chao_all_plot_SouthAmerica,
+             chao_all_est_Africa, #9
+             chao_all_est_Asia,
+             chao_all_est_Europe,
+             chao_all_est_NorthAmerica,
+             chao_all_est_Oceania,
+             chao_all_est_SouthAmerica,
+             widths = c(2, 2, 2, 1),
+             layout_matrix = rbind(c(1, 2, 3, 9),
+                                   c(1, 2, 4, 10),
+                                   c(1, 2, 5, 11),
+                                   c(1, 2, 6, 12),
+                                   c(1, 2, 7, 13),
+                                   c(1, 2, 8, 14)))
+```
+
+North America (including Central America and the Caribbean) has the largest and most even representation of records across decades (between 46 and 75% of global records) and shows its steepest decline in species richness between the 1990’s and the 2010’s. In contrast, Europe shows two separate periods of decline, one between the 1960’s and the 1970’s and a more recent drop between the 1980’s and 1990’s but stabilizes afterwards. Africa shows a sustained fall in species richness since the 1980’s, whereas in Asia the decline seems to have started two or three decades earlier. The trend in South America is less clear, although estimated richness also decreases in the last ten years of the dataset. 
+
+```{r sp dataset Chao statistics for each CONTINENT, message=FALSE, warning=FALSE}
+# SPECIMEN dataset 
+#Create an empty list to hold the iNEXT output for each family and run iNEXT in each family
+#cont_prsv_idec_chao <- list()
+#for (i in continents)
+#{
+#  contdata <- with(bees_prsv_cont_recs_by_sp_year %>% filter(idecade>1940, idecade<2020, Continent == i), as.data.frame(tapply(records, list(species,idecade),sum, na.rm=T)))
+#  contdata[is.na(contdata)] <- 0
+#  cont_prsv_idec_chao[[i]] <- iNEXT(contdata, q=0, datatype = "abundance")
+#}
+#save(cont_prsv_idec_chao, file = "cont_prsv_idec_chao.Rdata")
+load("cont_prsv_idec_chao.Rdata")
+
+# Generate ggiNEXT plots for each continent
+for (i in continents){ 
+  p <- 
+    ggiNEXT(cont_prsv_idec_chao[[i]], type=1) +
+    scale_shape_manual(values=c(16,16,16,16,16,16,16)) +
+    scale_size_manual(values = rep(2,9)) +
+    scale_colour_manual(values=viridis(length(levels(cont_prsv_idec_chao[[i]]$AsyEst$Site)),direction=-1)) +
+    theme(legend.position="none", axis.title.x = element_blank(),axis.title.y = element_blank(), text = element_text(size = 10))
+  assign(paste0("chao_prsv_plot_", sub(' ', '', i)), p)
+}
+
+# Extract idecadal richness estimator statistics for each continent and generate barplots
+for (i in continents){ 
+  asyest <- cont_prsv_idec_chao[[i]]$AsyEst[seq(1,21,3),]
+  p <- 
+    ggplot(asyest, aes(Site, Estimator)) +
+    geom_bar(stat="Identity") +
+    coord_cartesian(ylim = c(0.9*min(asyest$LCL), max(asyest$UCL))) + 
+    geom_errorbar(aes(ymin=LCL, ymax=UCL), width=.2, position=position_dodge(.9)) +
+    theme(legend.position="none", axis.title.x = element_blank(),axis.title.y = element_blank(), text = element_text(size = 9))
+  assign(paste0("chao_prsv_est_",  sub(' ', '', i)), p)
+}
+
+# Multipanel figure for continent-level analyses
+grid.arrange(cont_recs, cont_sp,
+             chao_prsv_plot_Africa, #3
+             chao_prsv_plot_Asia,
+             chao_prsv_plot_Europe,
+             chao_prsv_plot_NorthAmerica,
+             chao_prsv_plot_Oceania,
+             chao_prsv_plot_SouthAmerica,
+             chao_prsv_est_Africa, #9
+             chao_prsv_est_Asia,
+             chao_prsv_est_Europe,
+             chao_prsv_est_NorthAmerica,
+             chao_prsv_est_Oceania,
+             chao_prsv_est_SouthAmerica,
+             widths = c(2, 2, 2, 1),
+             layout_matrix = rbind(c(1, 2, 3, 9),
+                                   c(1, 2, 4, 10),
+                                   c(1, 2, 5, 11),
+                                   c(1, 2, 6, 12),
+                                   c(1, 2, 7, 13),
+                                   c(1, 2, 8, 14)))
+```
+
+
+
+Overall, analyses of the dataset at a continental scale show heterogeneity in both the proportional and absolute contributions to the records, and in the timing and magnitude of the decline in species richness. However, despite large differences in data availability, all continents except for Oceania seem to be contributing to the observed global decline in species richness of bee records.
+
+## Trends in record eveness
+
+A global decline in bee record diversity could relate to a proportional decrease in bee abundance, so that rare species become rarer or even extinct, and abundant species become less abundant. Alternatively, the less abundant species could be declining strongly, whereas abundant species might be declining at a lower rate or even thriving. These different scenarios are expected to leave a distinctive signature in the temporal pattern of relative record abundances. Under the first scenario, the sharp decrease in species richness estimates should not be accompanied by a decrease in evenness, a measure of how equally total record abundance is partitioned among species, whereas under the second scenario there should be a parallel decrease in record evenness. 
+
+```{r Pielou eveness index over time, message=FALSE, warning=FALSE}
+
+#FULL dataset
+bees_all_species_year_table <- xtabs(~year + species, data = bees_all %>% 
+                                       filter(year>1899, year<2016))
+year <- bees_all %>% 
+  filter(year>1899, year<2016) %>% 
+  select(year) %>% 
+  unique()
+H_all <- diversity(bees_all_species_year_table)
+J_all <- H_all/log(specnumber(bees_all_species_year_table))
+
+years <- names(J_all)
+J_all_tbl <- as_tibble(cbind(as.numeric(years), as.numeric(J_all)))
+colnames(J_all_tbl)<-c("year", "J")
+
+#SPECIMEN dataset
+bees_prsv_species_year_table <- xtabs(~year + species, data = bees_all %>% 
+                         filter(year>1899, year<2016, basisOfRecord=="PRESERVED_SPECIMEN"))
+year_prsv <- bees_all %>% 
+  filter(year>1899, year<2016, basisOfRecord=="PRESERVED_SPECIMEN") %>% 
+  select(year) %>% 
+  unique()
+H_prsv <- diversity(bees_prsv_species_year_table)
+J_prsv <- H_prsv/log(specnumber(bees_prsv_species_year_table))
+
+years <- names(J_prsv)
+J_prsv_tbl <- as_tibble(cbind(as.numeric(years), as.numeric(J_prsv)))
+colnames(J_prsv_tbl)<-c("year", "J")
+
+#Plot J over time for both datasets
+ggplot() +
+  geom_point(data = J_all_tbl, aes(x = year, y = J), color = "#00AFBB") +
+  geom_smooth(data = J_all_tbl, aes(x = year, y = J), color = "#00AFBB", fill = "lightblue") +
+  geom_point(data = J_prsv_tbl, aes(x = year, y = J), color = "red") +
+  geom_smooth(data = J_prsv_tbl, aes(x = year, y = J), color = "red", fill = "pink") +
+  xlab("Year")
+  
+```
+
+As expected from the hypothesis of an abundance-related differential species decline, plotting Pielou’s index (a common measure of evenness [@9334]) per year of bee records shows a strong decreasing trend since the 1990’s for both datasets. Therefore, this decline in species richness of records can relate to either a global change in how an invariant bee diversity is sampled, leading to more infrequent reporting of many species and much more frequent reporting of a few other species, or to a global phenomenon by which thousands of species are becoming too rare to be sampled while fewer species are becoming dominant and perhaps even increasing in abundance. These two alternatives are not mutually exclusive, but the global trend of decreasing evenness is consistent with reported regional trends of increasing dominance by one or a few bee species associated with large-scale anthropogenic disturbance [@9842;@9845].
+
+## Dataset dominance by *Apis mellifera*
+
+Associated with the declining trend of richness of species records is a trend of increasing dominance of records by a few species. Increasing dominance by one or a few species can be observed at the regional scale, like the case of *Bombus terrestris* in Scandinavia, within its native geographical range [@9842], and in southern South America, within its invaded range [@6124],  or the western honeybee *Apis mellifera* in the Mediterranean [@9845]. In particular, the western honeybee has been introduced in every single continent from its original geographical range in Europe and Africa. Although both domesticated and wild populations of the western honeybee seem to be declining in several countries, this species is still thriving globally [@9339]. 
+
+```{r Calculate fraction of Apis mellifera records, message=FALSE, warning=FALSE}
+apis_all_recs_by_year <- right_join(bees_all_recs_year, bees_all_recs_by_sp_year %>% filter(species=="Apis mellifera"), by="year")
+apis_all_recs_by_year <- apis_all_recs_by_year %>% mutate(fraction = n / records)
+
+apis_prsv_recs_by_year <- right_join(bees_prsv_recs_year, bees_prsv_recs_by_sp_year %>% filter(species=="Apis mellifera"), by="year")
+apis_prsv_recs_by_year <- apis_prsv_recs_by_year %>% mutate(fraction = n / records)
+
+ggplot() +
+  geom_point(data = apis_all_recs_by_year %>% filter(year>1899, year<2016), aes(x = year, y = fraction), color = "#00AFBB") +
+  geom_smooth(data = apis_all_recs_by_year %>% filter(year>1899, year<2016), aes(x = year, y = fraction), color = "#00AFBB", fill = "lightblue") +
+  geom_point(data = apis_prsv_recs_by_year %>% filter(year>1899, year<2016), aes(x = year, y = fraction), color = "red") +
+  geom_smooth(data = apis_prsv_recs_by_year %>% filter(year>1899, year<2016), aes(x = year, y = fraction), color = "red", fill = "pink")+
+  xlab("Year") + ylab("Fraction of total records reporting Apis mellifera")
+```
+
+Correspondingly, an increasing fraction of the total global bee records is composed of *Apis mellifera* occurrences. A consequence of increasingly less diverse and uneven bee assemblages could be an increase in pollination deficits, causing a reduction in the quantity and quality of the fruits and seeds produced by both wild and cultivated plants. Less diverse bee assemblages at both local and regional scales have been associated with lower and less stable yields of most pollinator-dependent crops [@6251].
+
+## Country level datasets
+
+Unsurprisingly, when data is disaggregated by country, agreement between country-level results and existing reports improves as the number of records increases. 
+
+```{r USA analysis, message=FALSE, warning=FALSE}
+####United States of America ----
+bees_us_recs_by_sp_year <- bees_all %>% filter(countryCode=="US", basisOfRecord=="PRESERVED_SPECIMEN") %>% group_by(species, family, year, idecade) %>% count()
+bees_us_recs_year <- bees_all  %>% filter(countryCode=="US", basisOfRecord=="PRESERVED_SPECIMEN") %>% group_by(year) %>% count() %>% rename(records = n)
+bees_us_sp_year <- bees_us_recs_by_sp_year %>% select(-n)  %>% group_by(year) %>% count() %>% rename(sp = n)
+
+bees_us_recs_sp_by_year <- inner_join(bees_us_recs_year, bees_us_sp_year, by="year")
+
+plot_us_recs <- 
+  ggplot(data = bees_us_recs_sp_by_year %>% filter(year>1899, year<2016), aes(x = year, y = records)) +
+  geom_point() +
+  geom_smooth() +
+  xlab("Year") + ylab("No. records")
+plot_us_sp <- 
+ggplot(data = bees_us_recs_sp_by_year %>% filter(year>1899, year<2016), aes(x = year, y = sp)) +
+  geom_point() +
+  geom_smooth() +
+  xlab("Year") + ylab("Species richness")
+
+sum(bees_us_recs_sp_by_year$records) # Total number of records
+
+#Count number of records by species and idecade
+bees_us_recs_by_sp_idec <- bees_all %>% filter(countryCode=="US", basisOfRecord=="PRESERVED_SPECIMEN") %>% group_by(species, family, idecade) %>% count()
+
+#Generate idecadal matrices and calculate Chao stats
+bees_us_recs_by_sp_idec.mat <-with(bees_us_recs_by_sp_idec %>% filter(idecade>1940, idecade<2020), as.data.frame(tapply(n, list(species,idecade),sum, na.rm=T)))
+bees_us_recs_by_sp_idec.mat[is.na(bees_us_recs_by_sp_idec.mat)] <- 0
+bees_us_chao_idec <- iNEXT(bees_us_recs_by_sp_idec.mat, q=0, datatype = "abundance")
+
+#iNEXT curves
+plot_chao_us <- 
+  ggiNEXT(bees_us_chao_idec, type=1) +
+  scale_shape_manual(values=c(19,19,19,19,19,19,19)) + xlim(0,4e+05) +
+  scale_colour_manual(values=viridis(length(levels(bees_us_chao_idec$AsyEst$Site)),direction=-1)) +
+  theme(legend.position="none", axis.text=element_text(size=10),axis.title=element_text(size=12) ) + 
+  xlab("No. records") + ylab("Species richness")
+
+#Extract and plot estimators as barplots
+chaoasyest_us_bees_idec <- bees_us_chao_idec$AsyEst[seq(1,21,3),]
+
+plot_est_us <- 
+  ggplot(chaoasyest_us_bees_idec, aes(Site, Estimator)) +
+  geom_bar(stat="Identity") +
+  coord_cartesian(ylim = c(min(chaoasyest_us_bees_idec$LCL*0.5), max(chaoasyest_us_bees_idec$UCL))) + 
+    geom_errorbar(aes(ymin=LCL, ymax=UCL), width=.2,
+                position=position_dodge(.9)) +
+  xlab("idecade")  + ylab("Species richness")
+```
+
+
+```{r Brazil analysis, message=FALSE, warning=FALSE}
+####Brazil
+bees_br_recs_by_sp_year <- bees_all %>% filter(countryCode=="BR", basisOfRecord=="PRESERVED_SPECIMEN") %>% group_by(species, family, year, idecade) %>% count()
+bees_br_recs_year <- bees_all  %>% filter(countryCode=="BR", basisOfRecord=="PRESERVED_SPECIMEN") %>% group_by(year) %>% count() %>% rename(records = n)
+bees_br_sp_year <- bees_br_recs_by_sp_year %>% select(-n)  %>% group_by(year) %>% count() %>% rename(sp = n)
+
+bees_br_recs_sp_by_year <- inner_join(bees_br_recs_year, bees_br_sp_year, by="year")
+
+plot_br_recs <- 
+  ggplot(data = bees_br_recs_sp_by_year %>% filter(year>1899, year<2016), aes(x = year, y = records)) +
+  geom_point() +
+  geom_smooth() +
+  xlab("Year") + ylab("No. records")
+plot_br_sp <- 
+  ggplot(data = bees_br_recs_sp_by_year %>% filter(year>1899, year<2016), aes(x = year, y = sp)) +
+  geom_point() +
+  geom_smooth() +
+  xlab("Year") + ylab("Species richness")
+
+sum(bees_br_recs_sp_by_year$records) # Total number of records
+
+#Count number of records by species and idecade
+bees_br_recs_by_sp_idec <- bees_all %>% filter(countryCode=="BR", basisOfRecord=="PRESERVED_SPECIMEN") %>% group_by(species, family, idecade) %>% count()
+
+#Generate idecadal matrices and calculate Chao stats
+bees_br_recs_by_sp_idec.mat <-with(bees_br_recs_by_sp_idec %>% filter(idecade>1940, idecade<2020), as.data.frame(tapply(n, list(species,idecade),sum, na.rm=T)))
+bees_br_recs_by_sp_idec.mat[is.na(bees_br_recs_by_sp_idec.mat)] <- 0
+bees_br_chao_idec <- iNEXT(bees_br_recs_by_sp_idec.mat, q=0, datatype = "abundance")
+
+#iNEXT curves
+plot_chao_br <- 
+  ggiNEXT(bees_br_chao_idec, type=1) +
+  scale_shape_manual(values=c(19,19,19,19,19,19,19)) + 
+  scale_colour_manual(values=viridis(length(levels(bees_br_chao_idec$AsyEst$Site)),direction=-1)) +
+  theme(legend.position="none", axis.text=element_text(size=10),axis.title=element_text(size=12) ) + 
+  xlab("No. records") + ylab("Species richness")
+
+#Extract and plot estimators as barplots
+chaoasyest_br_bees_idec <- bees_br_chao_idec$AsyEst[seq(1,21,3),]
+
+plot_est_br <- 
+  ggplot(chaoasyest_br_bees_idec, aes(Site, Estimator)) +
+  geom_bar(stat="Identity") +
+  coord_cartesian(ylim = c(min(chaoasyest_br_bees_idec$LCL*0.5), max(chaoasyest_br_bees_idec$UCL))) + 
+  geom_errorbar(aes(ymin=LCL, ymax=UCL), width=.2,
+                position=position_dodge(.9)) +
+  xlab("idecade")  + ylab("Species richness")
+```
+
+```{r GB analysis, message=FALSE, warning=FALSE}
+####Great Britain ----
+bees_gb_recs_by_sp_year <- bees_all %>% filter(countryCode=="GB", basisOfRecord=="PRESERVED_SPECIMEN") %>% group_by(species, family, year, idecade) %>% count()
+bees_gb_recs_year <- bees_all  %>% filter(countryCode=="GB", basisOfRecord=="PRESERVED_SPECIMEN") %>% group_by(year) %>% count() %>% rename(records = n)
+bees_gb_sp_year <- bees_gb_recs_by_sp_year %>% select(-n)  %>% group_by(year) %>% count() %>% rename(sp = n)
+
+bees_gb_recs_sp_by_year <- inner_join(bees_gb_recs_year, bees_gb_sp_year, by="year")
+
+plot_gb_recs <- 
+  ggplot(data = bees_gb_recs_sp_by_year %>% filter(year>1899, year<2016), aes(x = year, y = records)) +
+  geom_point() +
+  geom_smooth() +
+  xlab("Year") + ylab("No. records")
+plot_gb_sp <- 
+  ggplot(data = bees_gb_recs_sp_by_year %>% filter(year>1899, year<2016), aes(x = year, y = sp)) +
+  geom_point() +
+  geom_smooth() +
+  xlab("Year") + ylab("Species richness")
+
+sum(bees_gb_recs_sp_by_year$records) # Total number of records
+
+#Count number of records by species and idecade
+bees_gb_recs_by_sp_idec <- bees_all %>% filter(countryCode=="GB", basisOfRecord=="PRESERVED_SPECIMEN") %>% group_by(species, family, idecade) %>% count()
+
+#Generate idecadal matrices and calculate Chao stats
+bees_gb_recs_by_sp_idec.mat <-with(bees_gb_recs_by_sp_idec %>% filter(idecade>1940, idecade<2020), as.data.frame(tapply(n, list(species,idecade),sum, na.rm=T)))
+bees_gb_recs_by_sp_idec.mat[is.na(bees_gb_recs_by_sp_idec.mat)] <- 0
+bees_gb_chao_idec <- iNEXT(bees_gb_recs_by_sp_idec.mat, q=0, datatype = "abundance")
+
+#iNEXT curves
+plot_chao_gb <- 
+  ggiNEXT(bees_gb_chao_idec, type=1) +
+  scale_shape_manual(values=c(19,19,19,19,19,19,19)) + 
+  scale_colour_manual(values=viridis(length(levels(bees_gb_chao_idec$AsyEst$Site)),direction=-1)) +
+  theme(legend.position="none", axis.text=element_text(size=10),axis.title=element_text(size=12) ) + 
+  xlab("No. records") + ylab("Species richness")
+
+#Extract and plot estimators as barplots
+chaoasyest_gb_bees_idec <- bees_gb_chao_idec$AsyEst[seq(1,21,3),]
+
+plot_est_gb <- 
+  ggplot(chaoasyest_gb_bees_idec, aes(Site, Estimator)) +
+  geom_bar(stat="Identity") +
+  coord_cartesian(ylim = c(min(chaoasyest_gb_bees_idec$LCL*0.5), max(chaoasyest_gb_bees_idec$UCL))) + 
+  geom_errorbar(aes(ymin=LCL, ymax=UCL), width=.2,
+                position=position_dodge(.9)) +
+  xlab("idecade")  + ylab("Species richness")
+```
+
+
+```{r Panama analysis, message=FALSE, warning=FALSE}
+####Panama  ----
+bees_pa_recs_by_sp_year <- bees_all %>% filter(countryCode=="PA", basisOfRecord=="PRESERVED_SPECIMEN") %>% group_by(species, family, year, idecade) %>% count()
+bees_pa_recs_year <- bees_all  %>% filter(countryCode=="PA", basisOfRecord=="PRESERVED_SPECIMEN") %>% group_by(year) %>% count() %>% rename(records = n)
+bees_pa_sp_year <- bees_pa_recs_by_sp_year %>% select(-n)  %>% group_by(year) %>% count() %>% rename(sp = n)
+
+bees_pa_recs_sp_by_year <- inner_join(bees_pa_recs_year, bees_pa_sp_year, by="year")
+
+plot_pa_recs <- 
+  ggplot(data = bees_pa_recs_sp_by_year %>% filter(year>1899, year<2016), aes(x = year, y = records)) +
+  geom_point() +
+  geom_smooth() +
+  xlab("Year") + ylab("No. records")
+plot_pa_sp <- 
+  ggplot(data = bees_pa_recs_sp_by_year %>% filter(year>1899, year<2016), aes(x = year, y = sp)) +
+  geom_point() +
+  geom_smooth() +
+  xlab("Year") + ylab("Species richness")
+
+sum(bees_pa_recs_sp_by_year$records) # Total number of records
+
+#Count number of records by species and idecade
+bees_pa_recs_by_sp_idec <- bees_all %>% filter(countryCode=="PA", basisOfRecord=="PRESERVED_SPECIMEN") %>% group_by(species, family, idecade) %>% count()
+
+#Generate idecadal matrices and calculate Chao stats
+bees_pa_recs_by_sp_idec.mat <-with(bees_pa_recs_by_sp_idec %>% filter(idecade>1940, idecade<2020), as.data.frame(tapply(n, list(species,idecade),sum, na.rm=T)))
+bees_pa_recs_by_sp_idec.mat[is.na(bees_pa_recs_by_sp_idec.mat)] <- 0
+bees_pa_chao_idec <- iNEXT(bees_pa_recs_by_sp_idec.mat, q=0, datatype = "abundance")
+
+#iNEXT curves
+plot_chao_pa <- 
+  ggiNEXT(bees_pa_chao_idec, type=1) +
+  scale_shape_manual(values=c(19,19,19,19,19,19,19)) + 
+  scale_colour_manual(values=viridis(length(levels(bees_pa_chao_idec$AsyEst$Site)),direction=-1)) +
+  theme(legend.position="none", axis.text=element_text(size=10),axis.title=element_text(size=12) ) + 
+  xlab("No. records") + ylab("Species richness")
+
+#Extract and plot estimators as barplots
+chaoasyest_pa_bees_idec <- bees_pa_chao_idec$AsyEst[seq(1,21,3),]
+
+plot_est_pa <- 
+  ggplot(chaoasyest_pa_bees_idec, aes(Site, Estimator)) +
+  geom_bar(stat="Identity") +
+  coord_cartesian(ylim = c(min(chaoasyest_pa_bees_idec$LCL*0.5), max(chaoasyest_pa_bees_idec$UCL))) + 
+  geom_errorbar(aes(ymin=LCL, ymax=UCL), width=.2,
+                position=position_dodge(.9)) +
+  xlab("idecade")  + ylab("Species richness")
+```
+
+```{r Country-specific plots}
+## Multipanel figure for country-level analyses
+grid.arrange(plot_us_recs, plot_us_sp,plot_chao_us,plot_est_us, 
+             plot_br_recs, plot_br_sp,plot_chao_br,plot_est_br,
+             plot_gb_recs, plot_gb_sp,plot_chao_gb,plot_est_gb,
+             plot_pa_recs, plot_pa_sp,plot_chao_pa,plot_est_pa,
+             widths = c(2, 2, 2, 2),
+             layout_matrix = rbind(c(1, 2, 3, 4),
+                                   c(5, 6, 7, 8),
+                                   c(9, 10, 11, 12),
+                                   c(13, 14, 15, 16)))
+```
+
+The data reflects a clear and continuous decline in bee diversity in the USA [@9637;@9635;@9636] (with `r sum(bees_us_recs_sp_by_year$records)` records), a decline in Brazil [@9805] during the last two decades (`r sum(bees_br_recs_sp_by_year$records)` records), but shows no clear loss of richness in Great Britain (`r sum(bees_gb_recs_sp_by_year$records)` records), and much uncertainty in an apparent trend in bee species loss in Panama (`r sum(bees_pa_recs_sp_by_year$records)` records), despite reports of bee decline in  all those countries [@8947;@9038;@9720;@9837]. 
+
+## Conclusions
+
+One of the most important pieces of missing information of the global report on Pollinators, Pollination and Food Production of IPBES [@9281] was the lack of data on global bee decline, despite the many local and few regional reports pointing out that this decline could reflect a global phenomenon. Despite all its shortcomings, GBIF still is probably the best global data source available on long-term species occurrence and has the potential to contribute to filling this critical knowledge gap. Our analysis supports the hypothesis that we are undergoing a global decline in bee diversity that needs the immediate attention of governments and international institutions. Under the most optimistic interpretation – that bees are not declining, and that the trends we find are an artifact of data collection - our results would indicate that global efforts to record and monitor bee biodiversity are decreasing over time. However, and given the current outlook of global biodiversity [@9223;@9651;@9218;@6190], it is more likely that these trends reflect existing scenarios of declining bee diversity. In the best scenario, this can indicate that thousands of bee species have become too rare; under the worst scenario, they may have already gone locally or globally extinct. In any case, a decline in bee diversity driven by either increasing rarity or irreversible extinction will affect the pollination of wild plants and crops, with broader ecological and economic consequences [@6212;@6190]. Slowing down and even reversing habitat destruction and land-conversion to intensive uses, implementation of environmentally friendly schemes in agricultural and urban settings, and programs to re-flower our world are urgently required. Bees cannot wait.
+
+
+# References
+
+
