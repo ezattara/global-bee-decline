@@ -3,7 +3,7 @@
 #
 # An analysis of multidecadal trends in bee species richness from GBIF data
 #
-# Eduardo E. Zattara & Marcelo A. Aizen
+# Eduardo E. Zattara^1,2^ & Marcelo A. Aizen^1,3^
 #
 # Grupo de Ecología de la Polinización, INIBIOMA, 
 # Universidad Nacional del Comahue-CONICET, 
@@ -22,25 +22,25 @@
 #### Setting up data ---------------------------
 
 #Load necessary libraries
+library(tidyverse)
+library(data.table)
+library(gridExtra)
+library(nlme)
 library(iNEXT)
-library("data.table")
-library(dplyr)
-library(tidyr)
-library(ggplot2)
-library(egg)
 library(viridisLite)
 library(vegan)
-library(nlme)
 
 #Select working directory where the following data files are found:
-# "0001373-190621201848488.csv" # GBIF Download from https://doi.org/10.15468/dl.ysjm4x
+# "0058082-200221144449610.csv" # GBIF Download from https://doi.org/10.15468/dl.ysjm4x
 # "country-and-continent-codes-list.csv" # Country and continent codes, from https://datahub.io/JohnSnowLabs/country-and-continent-codes-list/r/0.html
 
 #Enter here current GBIF download to analyze -- Change if using different file
 GBIFdata <- "0058082-200221144449610.csv" # All Hymenoptera PRESERVED_SPECIMEN + HUMAN_OBSERVATION until 2020
 
 #Create a country code to country/continent table
-countries <- read.csv("country-and-continent-codes-list.csv")
+#Country and continent codes, from https://datahub.io/JohnSnowLabs/country-and-continent-codes-list/r/0.html
+
+countries <- read.csv("https://pkgstore.datahub.io/JohnSnowLabs/country-and-continent-codes-list/country-and-continent-codes-list-csv_csv/data/b7876b7f496677669644f3d1069d3121/country-and-continent-codes-list-csv_csv.csv")
 country2continent <- countries[,c(1,4)]
 colnames(country2continent)<-c("Continent","countryCode")
 
@@ -61,8 +61,14 @@ bees_all$idecade <- floor((bees_all$year + 4)/10)*10
 
 #### Count numbers records and species reported per year ----------------
 #Count number of records by species and year (for full and specimens-only datasets)
-bees_all_recs_by_sp_year <- bees_all %>% group_by(species, family, year, idecade) %>% count()
-bees_prsv_recs_by_sp_year <- bees_all %>% filter(basisOfRecord=="PRESERVED_SPECIMEN")%>% group_by(species, family, year, idecade) %>% count()
+bees_all_recs_by_sp_year <- bees_all %>% 
+  group_by(species, family, year, idecade) %>% 
+  count()
+
+bees_prsv_recs_by_sp_year <- bees_all %>% 
+  filter(basisOfRecord=="PRESERVED_SPECIMEN")%>% 
+  group_by(species, family, year, idecade) %>% 
+  count()
 
 #Histograms of abundance of records
 ggplot(bees_all_recs_by_sp_year %>% filter(idecade>1940), aes(log(n))) +
@@ -74,37 +80,105 @@ ggplot(bees_prsv_recs_by_sp_year %>% filter(idecade>1940), aes(log(n))) +
   facet_grid(.~idecade) + scale_y_log10()
 
 #Count number of species per year (for complete and preserved specimens only datasets)
-bees_all_sp_year <- bees_all_recs_by_sp_year %>% select(-n)  %>% group_by(year) %>% count() %>% rename(sp = n)
-bees_prsv_sp_year <- bees_prsv_recs_by_sp_year %>% select(-n) %>% group_by(year) %>% count() %>% rename(sp = n)
+bees_all_sp_year <- bees_all_recs_by_sp_year %>% 
+  select(-n)  %>% 
+  group_by(year) %>% 
+  count() %>% 
+  rename(sp = n)
+
+bees_prsv_sp_year <- bees_prsv_recs_by_sp_year %>% 
+  select(-n) %>% 
+  group_by(year) %>% 
+  count() %>% 
+  rename(sp = n)
 
 #Count number of records per year (for complete and preserved specimens only datasets)
-bees_all_recs_year <- bees_all %>% group_by(year) %>% count() %>% rename(records = n)
-bees_prsv_recs_year <- bees_all %>% filter(basisOfRecord=="PRESERVED_SPECIMEN")%>% group_by(year) %>% count()%>% rename(records = n)
+bees_all_recs_year <- bees_all %>% 
+  group_by(year) %>% 
+  count() %>% 
+  rename(records = n)
+
+bees_prsv_recs_year <- bees_all %>% 
+  filter(basisOfRecord=="PRESERVED_SPECIMEN")%>% 
+  group_by(year) %>% 
+  count()%>% 
+  rename(records = n)
 
 #Count number of datasets per year (for complete and preserved specimens only datasets)
-bees_all_recs_by_dataset_year <- bees_all %>% group_by(year, datasetKey) %>% count() 
-bees_all_datasets_year <- bees_all_recs_by_dataset_year %>% select(-n) %>% group_by(year) %>% count() %>% rename(datasets = n)
+bees_all_recs_by_dataset_year <- bees_all %>% 
+  group_by(year, datasetKey) %>% 
+  count() 
+bees_all_datasets_year <- bees_all_recs_by_dataset_year %>% 
+  select(-n) %>% 
+  group_by(year) %>% 
+  count() %>% 
+  rename(datasets = n)
 
-bees_prsv_recs_by_dataset_year <- bees_all %>% filter(basisOfRecord=="PRESERVED_SPECIMEN")%>% group_by(year, datasetKey) %>% count()
-bees_prsv_datasets_year <- bees_prsv_recs_by_dataset_year %>% select(-n) %>% group_by(year) %>% count() %>% rename(datasets = n)
+bees_prsv_recs_by_dataset_year <- bees_all %>% 
+  filter(basisOfRecord=="PRESERVED_SPECIMEN")%>% 
+  group_by(year, datasetKey) %>% 
+  count()
+
+bees_prsv_datasets_year <- bees_prsv_recs_by_dataset_year %>% 
+  select(-n) %>% 
+  group_by(year) %>% 
+  count() %>% 
+  rename(datasets = n)
 
 #Count number of collections per year (for complete and preserved specimens only datasets)
-bees_all_recs_by_collection_year <- bees_all %>% group_by(year, collectionCode) %>% count()
-bees_all_collections_year <- bees_all_recs_by_collection_year %>% select(-n)  %>% group_by(year) %>% count() %>% rename(collections = n)
+bees_all_recs_by_collection_year <- bees_all %>% 
+  group_by(year, collectionCode) %>% 
+  count()
 
-bees_prsv_recs_by_collection_year <- bees_all %>% filter(basisOfRecord=="PRESERVED_SPECIMEN")%>% group_by(year, collectionCode) %>% count()
-bees_prsv_collection_year <- bees_prsv_recs_by_collection_year %>% select(-n) %>% group_by(year) %>% count() %>% rename(collections = n)
+bees_all_collections_year <- bees_all_recs_by_collection_year %>% 
+  select(-n)  %>% 
+  group_by(year) %>% 
+  count() %>% 
+  rename(collections = n)
+
+bees_prsv_recs_by_collection_year <- bees_all %>% 
+  filter(basisOfRecord=="PRESERVED_SPECIMEN")%>% 
+  group_by(year, collectionCode) %>% 
+  count()
+
+bees_prsv_collection_year <- bees_prsv_recs_by_collection_year %>% 
+  select(-n) %>% 
+  group_by(year) %>% 
+  count() %>% 
+  rename(collections = n)
 
 #Count number of institutions per year (for complete and preserved specimens only datasets)
-bees_all_recs_by_institution_year <- bees_all %>% group_by(year, institutionCode) %>% count()
-bees_all_institution_year <- bees_all_recs_by_institution_year %>% select(-n) %>% group_by(year) %>% count() %>% rename(institutions = n)
+bees_all_recs_by_institution_year <- bees_all %>% 
+  group_by(year, institutionCode) %>% 
+  count()
 
-bees_prsv_recs_by_institution_year <- bees_all %>% filter(basisOfRecord=="PRESERVED_SPECIMEN")%>% group_by(year, institutionCode) %>% count()
-bees_prsv_institution_year <- bees_prsv_recs_by_institution_year %>% select(-n) %>% group_by(year) %>% count() %>% rename(institutions = n)
+bees_all_institution_year <- bees_all_recs_by_institution_year %>% 
+  select(-n) %>% 
+  group_by(year) %>% 
+  count() %>% 
+  rename(institutions = n)
+
+bees_prsv_recs_by_institution_year <- bees_all %>% 
+  filter(basisOfRecord=="PRESERVED_SPECIMEN")%>% 
+  group_by(year, institutionCode) %>% 
+  count()
+
+bees_prsv_institution_year <- bees_prsv_recs_by_institution_year %>% 
+  select(-n) %>% 
+  group_by(year) %>% 
+  count() %>% 
+  rename(institutions = n)
 
 #Merge all yearly counts
-bees_all_gbif_year <- full_join(bees_all_sp_year, bees_all_recs_year, by = "year") %>% full_join(bees_all_datasets_year, by = "year") %>% full_join(bees_all_collections_year, by = "year") %>% full_join(bees_all_institution_year, by = "year")
-bees_prsv_gbif_year <- full_join(bees_prsv_sp_year, bees_prsv_recs_year, by = "year") %>% full_join(bees_prsv_datasets_year, by = "year") %>% full_join(bees_prsv_collection_year, by = "year") %>% full_join(bees_prsv_institution_year, by = "year")
+bees_all_gbif_year <- full_join(bees_all_sp_year, bees_all_recs_year, by = "year") %>% 
+  full_join(bees_all_datasets_year, by = "year") %>% 
+  full_join(bees_all_collections_year, by = "year") %>% 
+  full_join(bees_all_institution_year, by = "year")
+
+bees_prsv_gbif_year <- full_join(bees_prsv_sp_year, bees_prsv_recs_year, by = "year") %>% 
+  full_join(bees_prsv_datasets_year, by = "year") %>% 
+  full_join(bees_prsv_collection_year, by = "year") %>% 
+  full_join(bees_prsv_institution_year, by = "year")
 
 #### Testing for negative trend on species counts after 1985 ----
 
@@ -216,7 +290,7 @@ plot_chao_prsv <-
   scale_shape_manual(values=c(19,19,19,19,19,19,19)) + xlim(0,1200000) +
   scale_colour_manual(values=viridis(length(levels(bees_prsv_global_chao_idec$AsyEst$Site)),direction=-1)) +
   theme(legend.position="none", axis.text=element_text(size=10),axis.title=element_text(size=12) ) + 
-  xlab("No. records (full dataset)") + ylab("Species richness")
+  xlab("No. records (specimens-only dataset)") + ylab("Species richness")
 
 
 plot_chao_all <- 
@@ -224,7 +298,7 @@ plot_chao_all <-
   scale_shape_manual(values=c(19,19,19,19,19,19,19))  + xlim(0,1200000) +
   scale_colour_manual(values=viridis(length(levels(bees_all_global_chao_idec$AsyEst$Site)),direction=-1)) +
   theme(legend.position="none", axis.text=element_text(size=10),axis.title=element_text(size=12)) + 
-  xlab("No. records (specimens-only dataset)") + ylab("Species richness")
+  xlab("No. records (Full dataset)") + ylab("Species richness")
 
 grid.arrange(plot_chao_all, plot_chao_prsv, ncol = 1)
 
